@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { songs, type Song } from './data/songs'
 
 type Theme = 'dark' | 'light'
+type SongOriginFilter = 'all' | Song['origin']
 
 type CurrentPerformance = {
   song: Song
@@ -392,6 +393,7 @@ function SongListItem({ song, isActive, showActions, onSelect, onPlay, onQueue }
 export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [browseTerm, setBrowseTerm] = useState('')
+  const [songOriginFilter, setSongOriginFilter] = useState<SongOriginFilter>('all')
   const [selectedSong, setSelectedSong] = useState<Song>(songs[0])
   const [actionSongId, setActionSongId] = useState<string | null>(null)
   const [currentPerformance, setCurrentPerformance] = useState<CurrentPerformance>({
@@ -543,6 +545,11 @@ export default function App() {
 
   const filteredSongs = songs.filter((song) => {
     const term = browseTerm.trim().toLowerCase()
+    const matchesOrigin = songOriginFilter === 'all' || song.origin === songOriginFilter
+
+    if (!matchesOrigin) {
+      return false
+    }
 
     if (!term) {
       return true
@@ -801,6 +808,30 @@ export default function App() {
             onChange={(event) => setBrowseTerm(event.target.value)}
           />
         </label>
+
+        <div className="song-filter-tabs" role="tablist" aria-label="Song origin filter">
+          <button
+            type="button"
+            className={`song-filter-tab${songOriginFilter === 'all' ? ' active' : ''}`}
+            onClick={() => setSongOriginFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`song-filter-tab${songOriginFilter === 'local' ? ' active' : ''}`}
+            onClick={() => setSongOriginFilter('local')}
+          >
+            Local
+          </button>
+          <button
+            type="button"
+            className={`song-filter-tab${songOriginFilter === 'foreign' ? ' active' : ''}`}
+            onClick={() => setSongOriginFilter('foreign')}
+          >
+            Foreign
+          </button>
+        </div>
 
         <div className="song-list-block">
           <div className="song-list-header">
