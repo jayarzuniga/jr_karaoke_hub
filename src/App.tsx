@@ -43,11 +43,44 @@ type GoogleAccounts = {
   }
 }
 
+type YouTubePlayer = {
+  destroy: () => void
+  loadVideoById: (videoId: string) => void
+  playVideo: () => void
+}
+
+type YouTubePlayerEvent = {
+  target: YouTubePlayer
+}
+
+type YouTubePlayerStateChangeEvent = YouTubePlayerEvent & {
+  data: number
+}
+
+type YouTubePlayerOptions = {
+  videoId?: string
+  playerVars?: Record<string, number | string>
+  events?: {
+    onError?: (event: unknown) => void
+    onReady?: (event: YouTubePlayerEvent) => void
+    onStateChange?: (event: YouTubePlayerStateChangeEvent) => void
+  }
+}
+
+type YouTubeApi = {
+  Player: new (element: HTMLElement, options: YouTubePlayerOptions) => YouTubePlayer
+  PlayerState: {
+    ENDED: number
+  }
+}
+
 declare global {
   interface Window {
     google?: {
       accounts: GoogleAccounts
     }
+    onYouTubeIframeAPIReady?: () => void
+    YT?: YouTubeApi
   }
 }
 
@@ -55,6 +88,9 @@ const themePreferenceKey = 'jr-karaoke-theme'
 const authStorageKey = 'jr-karaoke-user'
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
 const googleScriptId = 'google-identity-services'
+const youtubeScriptId = 'youtube-iframe-api'
+
+let youtubePlayerApiPromise: Promise<YouTubeApi> | null = null
 
 function getInitialTheme(): Theme {
   if (typeof window === 'undefined') {
@@ -146,20 +182,50 @@ function loadGoogleScript(): Promise<void> {
   })
 }
 
-function buildYoutubeEmbedUrl(videoId: string) {
-  const params = new URLSearchParams({
-    autoplay: '1',
-    controls: '1',
-    rel: '0',
-    playsinline: '1',
-    enablejsapi: '1',
-  })
-
-  if (typeof window !== 'undefined') {
-    params.set('origin', window.location.origin)
+function loadYouTubePlayerApi(): Promise<YouTubeApi> {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('YouTube player API is only available in the browser'))
   }
 
-  return `https://www.youtube.com/embed/${videoId}?${params.toString()}`
+  if (window.YT?.Player) {
+    return Promise.resolve(window.YT)
+  }
+
+  if (youtubePlayerApiPromise) {
+    return youtubePlayerApiPromise
+  }
+
+  youtubePlayerApiPromise = new Promise((resolve, reject) => {
+    const existingScript = document.getElementById(youtubeScriptId) as HTMLScriptElement | null
+    const previousReadyHandler = window.onYouTubeIframeAPIReady
+
+    window.onYouTubeIframeAPIReady = () => {
+      previousReadyHandler?.()
+
+      if (window.YT?.Player) {
+        resolve(window.YT)
+        return
+      }
+
+      reject(new Error('YouTube player API did not initialize correctly'))
+    }
+
+    if (existingScript) {
+      existingScript.addEventListener('error', () => reject(new Error('Failed to load YouTube player API')), {
+        once: true,
+      })
+      return
+    }
+
+    const script = document.createElement('script')
+    script.id = youtubeScriptId
+    script.src = 'https://www.youtube.com/iframe_api'
+    script.async = true
+    script.onerror = () => reject(new Error('Failed to load YouTube player API'))
+    document.head.appendChild(script)
+  })
+
+  return youtubePlayerApiPromise
 }
 
 function createQueueEntry(song: Song): QueueEntry {
@@ -203,6 +269,58 @@ type SongListItemProps = {
   onSelect: (song: Song) => void
   onPlay: (song: Song) => void
   onQueue: (song: Song) => void
+}
+
+type MarqueeLineProps = {
+  text: string
+  className: string
+  textClassName: string
+}
+
+function MarqueeLine({ text, className, textClassName }: MarqueeLineProps) {
+  const containerRef = useRef<HTMLSpanElement | null>(null)
+  const textRef = useRef<HTMLSpanElement | null>(null)
+  const [overflowShift, setOverflowShift] = useState(0)
+
+  useEffect(() => {
+    const containerElement = containerRef.current
+    const textElement = textRef.current
+
+    if (!containerElement || !textElement) {
+      return
+    }
+
+    const updateOverflow = () => {
+      const nextOverflowShift = Math.max(0, Math.ceil(textElement.scrollWidth - containerElement.clientWidth))
+      setOverflowShift(nextOverflowShift)
+    }
+
+    updateOverflow()
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => updateOverflow()) : null
+
+    resizeObserver?.observe(containerElement)
+    resizeObserver?.observe(textElement)
+    window.addEventListener('resize', updateOverflow)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', updateOverflow)
+    }
+  }, [text])
+
+  return (
+    <span className={`${className}${overflowShift > 0 ? ' is-overflowing' : ''}`} ref={containerRef}>
+      <span
+        className={textClassName}
+        ref={textRef}
+        style={{ '--marquee-shift': `${overflowShift}px` } as CSSProperties}
+      >
+        {text}
+      </span>
+    </span>
+  )
 }
 
 function SongListItem({ song, isActive, showActions, onSelect, onPlay, onQueue }: SongListItemProps) {
@@ -285,6 +403,9 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [authError, setAuthError] = useState('')
   const googleButtonRef = useRef<HTMLDivElement | null>(null)
+  const playerHostRef = useRef<HTMLDivElement | null>(null)
+  const playerRef = useRef<YouTubePlayer | null>(null)
+  const queueRef = useRef<QueueEntry[]>(queue)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -299,6 +420,10 @@ export default function App() {
 
     window.localStorage.removeItem(authStorageKey)
   }, [user])
+
+  useEffect(() => {
+    queueRef.current = queue
+  }, [queue])
 
   useEffect(() => {
     if (!googleClientId || user) {
@@ -358,6 +483,64 @@ export default function App() {
     }
   }, [theme, user])
 
+  useEffect(() => {
+    if (!user) {
+      return
+    }
+
+    let cancelled = false
+
+    loadYouTubePlayerApi()
+      .then((youtubeApi) => {
+        if (cancelled || !playerHostRef.current || playerRef.current) {
+          return
+        }
+
+        playerRef.current = new youtubeApi.Player(playerHostRef.current, {
+          videoId: currentPerformance.song.youtubeId,
+          playerVars: {
+            autoplay: 1,
+            controls: 1,
+            enablejsapi: 1,
+            playsinline: 1,
+            rel: 0,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: (event) => {
+              event.target.playVideo()
+            },
+            onStateChange: (event) => {
+              if (event.data === youtubeApi.PlayerState.ENDED) {
+                playNextQueuedSong()
+              }
+            },
+          },
+        })
+      })
+      .catch(() => {
+        // Keep the rest of the app usable even if the player API fails to load.
+      })
+
+    return () => {
+      cancelled = true
+
+      if (playerRef.current) {
+        playerRef.current.destroy()
+        playerRef.current = null
+      }
+    }
+  }, [user])
+
+  useEffect(() => {
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.destroy()
+        playerRef.current = null
+      }
+    }
+  }, [])
+
   const filteredSongs = songs.filter((song) => {
     const term = browseTerm.trim().toLowerCase()
 
@@ -368,7 +551,8 @@ export default function App() {
     return song.title.toLowerCase().includes(term) || song.artist.toLowerCase().includes(term)
   })
 
-  const currentSongEmbedUrl = buildYoutubeEmbedUrl(currentPerformance.song.youtubeId)
+  const queueDisplaySlots = Array.from({ length: 3 }, (_, index) => queue[index] ?? null)
+  const suggestionDisplaySongs = suggestedSongs.slice(0, 3)
 
   function signOut() {
     window.google?.accounts.id.disableAutoSelect()
@@ -397,7 +581,7 @@ export default function App() {
   }
 
   function playNextQueuedSong() {
-    const nextEntry = queue[0]
+    const nextEntry = queueRef.current[0]
 
     if (!nextEntry) {
       return
@@ -490,6 +674,15 @@ export default function App() {
     setSuggestedSongs(
       getRandomSuggestedSongs(getSuggestionExclusions(currentPerformance.song, queue, [], undefined), 3),
     )
+  }, [currentPerformance.song.youtubeId])
+
+  useEffect(() => {
+    if (!playerRef.current) {
+      return
+    }
+
+    playerRef.current.loadVideoById(currentPerformance.song.youtubeId)
+    playerRef.current.playVideo()
   }, [currentPerformance.song.youtubeId])
 
   if (!user) {
@@ -609,14 +802,6 @@ export default function App() {
           />
         </label>
 
-        <section className="selection-card">
-          <div>
-            <p className="eyebrow">Selected song</p>
-            <h3>{selectedSong.title}</h3>
-            <p className="selection-copy">{selectedSong.artist} - {selectedSong.duration}</p>
-          </div>
-        </section>
-
         <div className="song-list-block">
           <div className="song-list-header">
             <p className="eyebrow">Song list</p>
@@ -662,59 +847,75 @@ export default function App() {
 
         <section className="tv-stage-layout">
           <section className="player-card player-card--tv">
-            <div className="player-copy">
-              <p className="eyebrow">Now playing</p>
-              <h3>{currentPerformance.song.title}</h3>
-              <p>{currentPerformance.song.artist} - {currentPerformance.song.duration}</p>
-            </div>
-
-            <div className="player-actions">
-              <button type="button" className="primary-button" onClick={playNextQueuedSong} disabled={!queue.length}>
-                Play next in queue
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => addSongToQueue(currentPerformance.song)}
-              >
-                Re-queue current song
-              </button>
+            <div className="player-copy player-copy--tv">
+              <div className="player-topline">
+                <p className="eyebrow">Now playing</p>
+                <div className="player-actions player-actions--compact">
+                  <button type="button" className="primary-button compact-action-button" onClick={playNextQueuedSong} disabled={!queue.length}>
+                    Play next in queue
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button compact-action-button"
+                    onClick={() => addSongToQueue(currentPerformance.song)}
+                  >
+                    Re-queue
+                  </button>
+                </div>
+              </div>
+              <h2 className="now-playing-artist">{currentPerformance.song.artist}</h2>
+              <div className="now-playing-title-row">
+                <h3 className="now-playing-title">{currentPerformance.song.title}</h3>
+                <span className="now-playing-duration">{currentPerformance.song.duration}</span>
+              </div>
             </div>
 
             <div className="video-frame video-frame--tv">
-              <iframe
-                key={currentPerformance.song.youtubeId}
-                title={`${currentPerformance.song.title} YouTube player`}
-                src={currentSongEmbedUrl}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-                referrerPolicy="strict-origin-when-cross-origin"
-              />
+              <div ref={playerHostRef} className="youtube-player-host" />
             </div>
           </section>
 
           <aside className="tv-side-stack">
-            <article className="feature-card queue-card">
-              <div className="queue-header">
+            <article className="feature-card queue-card arcade-panel">
+              <div className="queue-header arcade-panel-header">
                 <div>
-                  <p className="eyebrow">Queue</p>
                   <h3>Up next</h3>
                 </div>
 
-                <span className="queue-count">{queue.length} songs</span>
+                <span className="queue-count">{queue.length} queued</span>
               </div>
 
-              {queue.length ? (
-                <div className="queue-list">
-                  {queue.map((song, index) => (
-                    <div key={song.id} className="queue-item">
-                      <div className="queue-song-copy">
-                        <strong className="queue-title">{song.song.title}</strong>
-                        <span className="queue-meta">
-                          {song.song.artist} - {song.song.duration}
-                        </span>
-                      </div>
+              <div className="queue-list arcade-list">
+                {queueDisplaySlots.map((queueEntry, index) => (
+                  <div
+                    key={queueEntry?.id ?? `empty-slot-${index + 1}`}
+                    className={`queue-item arcade-row${queueEntry ? '' : ' arcade-row--empty'}`}
+                  >
+                    <span className="arcade-slot-number">{index + 1}</span>
 
+                    <div className="arcade-song-block">
+                      {queueEntry ? (
+                        <>
+                          <MarqueeLine
+                            text={queueEntry.song.artist}
+                            className="arcade-artist-line"
+                            textClassName="arcade-artist-line-text"
+                          />
+                          <MarqueeLine
+                            text={queueEntry.song.title}
+                            className="arcade-title-line"
+                            textClassName="arcade-title-line-text"
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <span className="arcade-empty-label">Empty</span>
+                          <span className="arcade-empty-copy">Open slot</span>
+                        </>
+                      )}
+                    </div>
+
+                    {queueEntry ? (
                       <div className="queue-actions">
                         <button
                           type="button"
@@ -731,42 +932,51 @@ export default function App() {
                           Remove
                         </button>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty-state">The queue is empty. Add songs from the list to line up the next track.</p>
-              )}
+                    ) : (
+                      <span className="arcade-slot-status">Waiting</span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </article>
 
-            <article className="feature-card queue-card">
-              <p className="eyebrow">Suggestions</p>
+            <article className="feature-card queue-card arcade-panel">
               <h3>Try these next</h3>
-              <div className="suggestion-list">
-                {suggestedSongs.map((suggestedSong, index) => (
-                  <div key={suggestedSong.youtubeId} className="suggestion-card">
-                    <strong>{suggestedSong.title}</strong>
-                    <span className="song-meta">
-                      {suggestedSong.artist} - {suggestedSong.duration}
-                    </span>
+              <div className="suggestion-list arcade-list">
+                {suggestionDisplaySongs.map((suggestedSong, index) => (
+                  <div key={suggestedSong.youtubeId} className="suggestion-card arcade-row arcade-row--suggestion">
+                    <span className="arcade-slot-number">{index + 1}</span>
+                    <div className="arcade-song-block">
+                      <MarqueeLine
+                        text={suggestedSong.artist}
+                        className="arcade-artist-line"
+                        textClassName="arcade-artist-line-text"
+                      />
+                      <MarqueeLine
+                        text={suggestedSong.title}
+                        className="arcade-title-line"
+                        textClassName="arcade-title-line-text"
+                      />
+                    </div>
+
                     <div className="suggestion-actions">
                       <button
                         type="button"
-                        className="primary-button suggestion-button"
+                        className="suggestion-pill suggestion-pill--play"
                         onClick={() => playSuggestedSong(index)}
                       >
-                        Play
+                        ▶ Play
                       </button>
                       <button
                         type="button"
-                        className="secondary-button suggestion-button"
+                        className="suggestion-pill suggestion-pill--queue"
                         onClick={() => queueSuggestedSong(index)}
                       >
-                        Queue
+                        + Queue
                       </button>
                       <button
                         type="button"
-                        className="ghost-button suggestion-button"
+                        className="suggestion-pill suggestion-pill--change"
                         onClick={() => replaceSuggestedSong(index)}
                       >
                         Change
