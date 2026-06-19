@@ -561,20 +561,34 @@ export default function App() {
     }
   }, [])
 
-  const filteredSongs = songs.filter((song) => {
-    const term = browseTerm.trim().toLowerCase()
-    const matchesOrigin = songOriginFilter === 'all' || song.origin === songOriginFilter
+  const filteredSongs = songs
+    .filter((song) => {
+      const term = browseTerm.trim().toLowerCase()
+      const matchesOrigin = songOriginFilter === 'all' || song.origin === songOriginFilter
 
-    if (!matchesOrigin) {
-      return false
-    }
+      if (!matchesOrigin) {
+        return false
+      }
 
-    if (!term) {
-      return true
-    }
+      if (!term) {
+        return true
+      }
 
-    return song.title.toLowerCase().includes(term) || song.artist.toLowerCase().includes(term)
-  })
+      return song.title.toLowerCase().includes(term) || song.artist.toLowerCase().includes(term)
+    })
+    .sort((leftSong, rightSong) => {
+      const titleComparison = leftSong.title.localeCompare(rightSong.title, undefined, {
+        sensitivity: 'base',
+      })
+
+      if (titleComparison !== 0) {
+        return titleComparison
+      }
+
+      return leftSong.artist.localeCompare(rightSong.artist, undefined, {
+        sensitivity: 'base',
+      })
+    })
 
   const queueLeadEntry = queue[0] ?? null
   const queueTickerItems = queue.slice(1).map((entry) => `${entry.song.artist} - ${entry.song.title}`)
