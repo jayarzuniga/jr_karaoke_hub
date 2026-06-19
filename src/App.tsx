@@ -75,6 +75,28 @@ type YouTubeApi = {
   }
 }
 
+type SongListItemProps = {
+  song: Song
+  isActive: boolean
+  showActions: boolean
+  onSelect: (song: Song) => void
+  onPlay: (song: Song) => void
+  onQueue: (song: Song) => void
+}
+
+type MarqueeLineProps = {
+  text: string
+  className: string
+  textClassName: string
+}
+
+type TickerTapeProps = {
+  items: string[]
+  emptyText: string
+  className: string
+  textClassName: string
+}
+
 declare global {
   interface Window {
     google?: {
@@ -239,7 +261,6 @@ function createQueueEntry(song: Song): QueueEntry {
 function getRandomSuggestedSongs(excludedVideoIds: string[], count: number) {
   const availableSongs = songs.filter((song) => !excludedVideoIds.includes(song.youtubeId))
   const sourceSongs = availableSongs.length ? availableSongs : songs
-
   const shuffledSongs = [...sourceSongs]
 
   for (let index = shuffledSongs.length - 1; index > 0; index -= 1) {
@@ -250,7 +271,12 @@ function getRandomSuggestedSongs(excludedVideoIds: string[], count: number) {
   return shuffledSongs.slice(0, Math.min(count, shuffledSongs.length))
 }
 
-function getSuggestionExclusions(currentSong: Song, queueEntries: QueueEntry[], currentSuggestions: Song[], skipIndex?: number) {
+function getSuggestionExclusions(
+  currentSong: Song,
+  queueEntries: QueueEntry[],
+  currentSuggestions: Song[],
+  skipIndex?: number,
+) {
   const exclusions = new Set<string>([currentSong.youtubeId])
 
   queueEntries.forEach((entry) => exclusions.add(entry.song.youtubeId))
@@ -261,21 +287,6 @@ function getSuggestionExclusions(currentSong: Song, queueEntries: QueueEntry[], 
   })
 
   return [...exclusions]
-}
-
-type SongListItemProps = {
-  song: Song
-  isActive: boolean
-  showActions: boolean
-  onSelect: (song: Song) => void
-  onPlay: (song: Song) => void
-  onQueue: (song: Song) => void
-}
-
-type MarqueeLineProps = {
-  text: string
-  className: string
-  textClassName: string
 }
 
 function MarqueeLine({ text, className, textClassName }: MarqueeLineProps) {
@@ -324,6 +335,16 @@ function MarqueeLine({ text, className, textClassName }: MarqueeLineProps) {
   )
 }
 
+function TickerTape({ items, emptyText, className, textClassName }: TickerTapeProps) {
+  const tickerText = items.length ? items.join('  |  ') : emptyText
+
+  return (
+    <div className={className}>
+      <span className={textClassName}>{tickerText}</span>
+    </div>
+  )
+}
+
 function SongListItem({ song, isActive, showActions, onSelect, onPlay, onQueue }: SongListItemProps) {
   const titleRef = useRef<HTMLSpanElement | null>(null)
   const textRef = useRef<HTMLSpanElement | null>(null)
@@ -349,7 +370,6 @@ function SongListItem({ song, isActive, showActions, onSelect, onPlay, onQueue }
 
     resizeObserver?.observe(titleElement)
     resizeObserver?.observe(textElement)
-
     window.addEventListener('resize', updateOverflow)
 
     return () => {
@@ -396,11 +416,9 @@ export default function App() {
   const [songOriginFilter, setSongOriginFilter] = useState<SongOriginFilter>('all')
   const [selectedSong, setSelectedSong] = useState<Song>(songs[0])
   const [actionSongId, setActionSongId] = useState<string | null>(null)
-  const [currentPerformance, setCurrentPerformance] = useState<CurrentPerformance>({
-    song: songs[0],
-  })
+  const [currentPerformance, setCurrentPerformance] = useState<CurrentPerformance>({ song: songs[0] })
   const [queue, setQueue] = useState<QueueEntry[]>([])
-  const [suggestedSongs, setSuggestedSongs] = useState<Song[]>(() => getRandomSuggestedSongs([songs[0].youtubeId], 3))
+  const [suggestedSongs, setSuggestedSongs] = useState<Song[]>(() => getRandomSuggestedSongs([songs[0].youtubeId], 1))
   const [user, setUser] = useState<AuthUser | null>(getStoredUser)
   const [authStatus, setAuthStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [authError, setAuthError] = useState('')
@@ -558,8 +576,9 @@ export default function App() {
     return song.title.toLowerCase().includes(term) || song.artist.toLowerCase().includes(term)
   })
 
-  const queueDisplaySlots = Array.from({ length: 3 }, (_, index) => queue[index] ?? null)
-  const suggestionDisplaySongs = suggestedSongs.slice(0, 3)
+  const queueLeadEntry = queue[0] ?? null
+  const queueTickerItems = queue.slice(1).map((entry) => `${entry.song.artist} - ${entry.song.title}`)
+  const suggestionLeadSong = suggestedSongs[0] ?? null
 
   function signOut() {
     window.google?.accounts.id.disableAutoSelect()
@@ -574,9 +593,7 @@ export default function App() {
   }
 
   function playSongNow(song: Song) {
-    setCurrentPerformance({
-      song,
-    })
+    setCurrentPerformance({ song })
     setSelectedSong(song)
     setActionSongId(null)
   }
@@ -679,7 +696,7 @@ export default function App() {
 
   useEffect(() => {
     setSuggestedSongs(
-      getRandomSuggestedSongs(getSuggestionExclusions(currentPerformance.song, queue, [], undefined), 3),
+      getRandomSuggestedSongs(getSuggestionExclusions(currentPerformance.song, queue, [], undefined), 1),
     )
   }, [currentPerformance.song.youtubeId])
 
@@ -882,7 +899,12 @@ export default function App() {
               <div className="player-topline">
                 <p className="eyebrow">Now playing</p>
                 <div className="player-actions player-actions--compact">
-                  <button type="button" className="primary-button compact-action-button" onClick={playNextQueuedSong} disabled={!queue.length}>
+                  <button
+                    type="button"
+                    className="primary-button compact-action-button"
+                    onClick={playNextQueuedSong}
+                    disabled={!queue.length}
+                  >
                     Play next in queue
                   </button>
                   <button
@@ -912,79 +934,82 @@ export default function App() {
                 <div>
                   <h3>Up next</h3>
                 </div>
-
                 <span className="queue-count">{queue.length} queued</span>
               </div>
 
-              <div className="queue-list arcade-list">
-                {queueDisplaySlots.map((queueEntry, index) => (
-                  <div
-                    key={queueEntry?.id ?? `empty-slot-${index + 1}`}
-                    className={`queue-item arcade-row${queueEntry ? '' : ' arcade-row--empty'}`}
-                  >
-                    <span className="arcade-slot-number">{index + 1}</span>
+              <div className="arcade-board">
+                <div className={`queue-item arcade-row${queueLeadEntry ? '' : ' arcade-row--empty'}`}>
+                  <span className="arcade-slot-number">1</span>
 
-                    <div className="arcade-song-block">
-                      {queueEntry ? (
-                        <>
-                          <MarqueeLine
-                            text={queueEntry.song.artist}
-                            className="arcade-artist-line"
-                            textClassName="arcade-artist-line-text"
-                          />
-                          <MarqueeLine
-                            text={queueEntry.song.title}
-                            className="arcade-title-line"
-                            textClassName="arcade-title-line-text"
-                          />
-                        </>
-                      ) : (
-                        <>
-                          <span className="arcade-empty-label">Empty</span>
-                          <span className="arcade-empty-copy">Open slot</span>
-                        </>
-                      )}
-                    </div>
-
-                    {queueEntry ? (
-                      <div className="queue-actions">
-                        <button
-                          type="button"
-                          className="secondary-button queue-button"
-                          onClick={() => playSpecificQueuedSong(index)}
-                        >
-                          Play
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost-button queue-button"
-                          onClick={() => removeQueuedSong(index)}
-                        >
-                          Remove
-                        </button>
-                      </div>
+                  <div className="arcade-song-block">
+                    {queueLeadEntry ? (
+                      <>
+                        <MarqueeLine
+                          text={queueLeadEntry.song.artist}
+                          className="arcade-artist-line"
+                          textClassName="arcade-artist-line-text"
+                        />
+                        <MarqueeLine
+                          text={queueLeadEntry.song.title}
+                          className="arcade-title-line"
+                          textClassName="arcade-title-line-text"
+                        />
+                      </>
                     ) : (
-                      <span className="arcade-slot-status">Waiting</span>
+                      <>
+                        <span className="arcade-empty-label">Empty</span>
+                        <span className="arcade-empty-copy">Open slot</span>
+                      </>
                     )}
                   </div>
-                ))}
+
+                  {queueLeadEntry ? (
+                    <div className="queue-actions">
+                      <button
+                        type="button"
+                        className="secondary-button queue-button"
+                        onClick={() => playSpecificQueuedSong(0)}
+                      >
+                        Play
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button queue-button"
+                        onClick={() => removeQueuedSong(0)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="arcade-slot-status">Waiting</span>
+                  )}
+                </div>
+
+                <TickerTape
+                  items={queueTickerItems}
+                  emptyText="More queued songs will appear here."
+                  className="arcade-ticker"
+                  textClassName="arcade-ticker-text"
+                />
               </div>
             </article>
 
             <article className="feature-card queue-card arcade-panel">
               <h3>Try these next</h3>
-              <div className="suggestion-list arcade-list">
-                {suggestionDisplaySongs.map((suggestedSong, index) => (
-                  <div key={suggestedSong.youtubeId} className="suggestion-card arcade-row arcade-row--suggestion">
-                    <span className="arcade-slot-number">{index + 1}</span>
+
+              <div className="arcade-board">
+                {suggestionLeadSong ? (
+                  <div className="suggestion-card arcade-row arcade-row--suggestion">
+                    <span className="arcade-slot-number">1</span>
+
                     <div className="arcade-song-block">
                       <MarqueeLine
-                        text={suggestedSong.artist}
+                        text={suggestionLeadSong.artist}
                         className="arcade-artist-line"
                         textClassName="arcade-artist-line-text"
                       />
                       <MarqueeLine
-                        text={suggestedSong.title}
+                        text={suggestionLeadSong.title}
                         className="arcade-title-line"
                         textClassName="arcade-title-line-text"
                       />
@@ -994,27 +1019,27 @@ export default function App() {
                       <button
                         type="button"
                         className="suggestion-pill suggestion-pill--play"
-                        onClick={() => playSuggestedSong(index)}
+                        onClick={() => playSuggestedSong(0)}
                       >
-                        ▶ Play
+                        Play
                       </button>
                       <button
                         type="button"
                         className="suggestion-pill suggestion-pill--queue"
-                        onClick={() => queueSuggestedSong(index)}
+                        onClick={() => queueSuggestedSong(0)}
                       >
                         + Queue
                       </button>
                       <button
                         type="button"
                         className="suggestion-pill suggestion-pill--change"
-                        onClick={() => replaceSuggestedSong(index)}
+                        onClick={() => replaceSuggestedSong(0)}
                       >
                         Change
                       </button>
                     </div>
                   </div>
-                ))}
+                ) : null}
               </div>
             </article>
           </aside>
